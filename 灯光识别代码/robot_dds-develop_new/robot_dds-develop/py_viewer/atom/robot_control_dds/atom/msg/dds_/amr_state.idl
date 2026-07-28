@@ -1,0 +1,61 @@
+module dobot_atom{
+    module msg{
+        module dds_{
+            enum NavigationStatus_ {
+                UNKNOWN,            // 未知
+                QUEUING,            // 排队
+                RUNNING,            // 运行中
+                COMPLETED,          // 完成
+                FAILED,             // 失败
+                PAUSED,             // 暂停
+                CANCELED,           // 取消
+                WAITING_CONFIRM,    // 等待确认
+                IDLE,               // 空闲
+                STOPPED             // 停止状态
+            };// 枚举仅作navigation_status的数值参考
+
+            enum DeviceStatus_ {
+                DEVUNKNOWN,        // 未知
+                DEVIDLE,           // 小车空闲
+                TASKING,        // 任务中
+                ERROR,          // 故障中
+                OFFLINE,        // 离线
+                INIT,           // 设备初始化
+                CHARGING,       // 充电中
+                UPGRADE         // 升级中
+            }; // 枚举仅作device_status的数值参考
+            @extensibility(FINAL)
+            struct AMREventStatus_{
+                boolean emergency_stop_pressed;             // 急停按钮被按下
+                boolean enable_pressed;                     // 使能键被按下
+                boolean path_blocked;                        // 路径被挡住
+                boolean low_battery;                         // 电池电量过低
+                boolean obstacle_detected;                   // 被障碍物挡住
+                
+            };
+            
+            @extensibility(FINAL)
+            struct AMRBasicStatus_{
+                float battery_level;        // 电池电量百分比
+                float battery_voltage;      // 电池电压
+                float battery_current;      // 电池电流
+                uint16 heartbeat;          // 心跳值
+            };
+
+            @extensibility(FINAL)
+            struct AMRState_ {
+                DeviceStatus_ device_status;                         // 设备状态
+                NavigationStatus_ navigation_status;                    // 导航状态 参考上述enum，用于判断任务是否完成
+                AMRBasicStatus_ basic_status;                // 基础状态
+                float position[3];                          // 当前位置 {x,y,yaw}
+                AMREventStatus_ amr_event;                   // 底盘相关事件 
+                uint32 error_code[32];                        // 错误码
+                uint32 task_id;                           // 任务ID
+                uint32 work_mode;                         // 机器人工作模式 枚举如右： 0：任务模式 || 3：遥控模式 || 4:检修模式
+            };
+
+
+
+        };
+    };
+};

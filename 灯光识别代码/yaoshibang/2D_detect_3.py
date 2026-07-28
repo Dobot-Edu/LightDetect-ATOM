@@ -1,0 +1,324 @@
+import cv2
+import time
+from ultralytics import YOLO
+import random
+import pyrealsense2 as rs
+import numpy as np
+import socket
+import threading
+
+
+# -----------------------------
+# 工具函数：读取坐标文件并计算仿射矩阵
+# -----------------------------
+def read_2d_points_from_file(file_path):
+    points = []
+    try:
+        with open(file_path, 'r') as file:
+            for i, line in enumerate(file):
+                try:
+                    x, y = map(float, line.strip().split())
+                    points.append([x, y])
+                except ValueError:
+                    print(f"文件 '{file_path}' 第 {i + 1} 行格式错误，跳过。")
+        return np.array(points, dtype=np.float32)
+    except FileNotFoundError:
+        print(f"文件未找到: {file_path}")
+        return None
+
+
+def estimate_affine_2d(src_points, dst_points):
+    if src_points is None or dst_points is None or len(src_points) < 3 or len(src_points) != len(dst_points):
+        print("仿射变换估计失败：点数不足或文件为空")
+        return None
+    matrix, _ = cv2.estimateAffine2D(src_points, dst_points)
+    return matrix
+
+
+# -----------------------------
+# 预加载仿射矩阵
+# -----------------------------
+print("正在加载左右手仿射变换矩阵...")
+
+src_left = read_2d_points_from_file('camPosLeft.txt')  # yellow → 左手
+dst_left = read_2d_points_from_file('robPosLeft.txt')
+matrix_left = estimate_affine_2d(src_left, dst_left)
+
+src_right = read_2d_points_from_file('camPosRigth.txt')  # green → 右手
+dst_right = read_2d_points_from_file('robPosRight.txt')
+matrix_right = estimate_affine_2d(src_right, dst_right)
+
+if matrix_left is None:
+    print("❌ 错误: 左手仿射矩阵加载失败")
+    exit(1)
+if matrix_right is None:
+    print("❌ 错误: 右手仿射矩阵加载失败")
+    exit(1)
+
+print("✅ 仿射矩阵加载成功")
+
+# -----------------------------
+# 模型加载
+# -----------------------------
+# model = YOLO('/home/dobotpc2/Documents/visionDetect/runs/train/exp4/weights/best_gy2.pt')
+model = YOLO('/home/zz/Downloads/yaoshibang/runs/best_yaoshibang.pt')
+
+
+num_classes = len(model.names)
+colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for _ in range(num_classes)]
+
+try:
+    green_id = list(model.names.values()).index('Vita')
+    yellow_id = list(model.names.values()).index('Aliens')
+    print(green_id,"===11111green")
+    print(yellow_id, "===11111white")
+except ValueError:
+    print("模型中未找到 'Vita' 或 'Aliens' 类别")
+    exit(1)
+
+TARGET_SET = {green_id, yellow_id}
+print(TARGET_SET, "===11111green")
+
+
+# -----------------------------
+# RealSense 相机设置
+# -----------------------------
+SECOND_CAMERA_SERIAL = "241122303389"
+pipeline = rs.pipeline()
+config = rs.config()
+
+ctx = rs.context()
+devices = ctx.query_devices()
+if not any(dev.get_info(rs.camera_info.serial_number) == SECOND_CAMERA_SERIAL for dev in devices):
+    print(f"未找到相机: {SECOND_CAMERA_SERIAL}")
+    exit(1)
+
+config.enable_device(SECOND_CAMERA_SERIAL)
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+# -----------------------------
+# TCP 服务端设置
+# -----------------------------
+TCP_HOST = '127.0.0.1'
+TCP_PORT = 65432
+
+client_socket = None
+client_lock = threading.Lock()
+
+# 状态定义
+STATE_WAITING_CMD = 'WAITING_CMD'
+STATE_DETECTING = 'DETECTING'
+STATE_WAITING_RESULT_OK = 'WAITING_RESULT_OK'
+STATE_READY = 'READY'               # 开始状态：已 start，等待 resultOK 触发检测
+
+current_state = STATE_WAITING_CMD
+
+# 延迟与缓存变量
+delay_start_time = None
+delay_duration = 5
+last_valid_yellow_result = None
+last_valid_green_result = None
+image_counter = 0
+
+
+def reset_detection_state():
+    """重置所有检测状态，用于新连接或重启"""
+    global delay_start_time, last_valid_yellow_result, last_valid_green_result
+    delay_start_time = None
+    last_valid_yellow_result = None
+    last_valid_green_result = None
+
+
+def handle_new_client_connection():
+    """客户端连接时初始化状态"""
+    global current_state
+    with client_lock:
+
+        current_state = STATE_WAITING_CMD
+        reset_detection_state()
+    print("🔄 已重置状态，等待 'start' 指令...")
+
+
+def tcp_server():
+    global client_socket
+    global current_state
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind((TCP_HOST, TCP_PORT))
+    server_socket.listen(1)
+    print(f"TCP服务端已启动，监听 {TCP_HOST}:{TCP_PORT}...")
+
+    while True:
+        conn, addr = server_socket.accept()
+        print(f"客户端 {addr} 已连接")
+
+        # 重置状态，确保新连接从头开始
+        handle_new_client_connection()
+
+        with client_lock:
+            client_socket = conn
+
+        try:
+            # client_socket.sendall(b"ACK:READY\n")
+            print(b"ACK:READY\n")
+
+            while True:
+                data = client_socket.recv(1024).decode('utf-8').strip()
+                if not data:
+                    break  # 客户端断开
+
+                print(f"收到指令: {data}")
+
+                with client_lock:
+                    state = current_state
+
+                if state == STATE_WAITING_CMD:
+                    if data.lower() == 'start':
+                        with client_lock:
+                            current_state = STATE_DETECTING
+                        # client_socket.sendall(b"ACK:DETECTION_STARTED\n")
+                        print("ACK:DETECTION_STARTED")
+                        print("🟢 收到 'start'，进入检测状态")
+                    # 忽略 resultOK
+
+                elif state == STATE_WAITING_RESULT_OK:
+                    if data.lower() == 'resultok':
+                        with client_lock:
+                            current_state = STATE_DETECTING
+                        # client_socket.sendall(b"ACK:DETECTION_RESTARTED\n")
+                        print("🟢 收到 'resultOK'，重新开始检测")
+                    # 忽略 start
+
+        except (ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
+        finally:
+            with client_lock:
+                client_socket = None
+            print("❌ 客户端已断开，等待新连接...")
+            # 断开后自动重置，等待下一次连接
+
+
+# 启动 TCP 服务线程
+tcp_thread = threading.Thread(target=tcp_server, daemon=True)
+tcp_thread.start()
+
+# -----------------------------
+# 主循环
+# -----------------------------
+pipeline.start(config)
+try:
+    while True:
+        frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        if not color_frame:
+            continue
+        color_image = np.asanyarray(color_frame.get_data())
+        display_image = color_image.copy()
+
+        # 获取当前状态
+        with client_lock:
+            state = current_state
+
+        # 状态机处理
+        if state == STATE_DETECTING:
+            results = model.predict(source=color_image, save=False, verbose=False)
+            result = results[0]
+            boxes = result.boxes
+            detected = []
+
+            # 收集所有符合条件的目标（green/yellow + 置信度 > 0.7 + ROI 区域）
+            for box in boxes:
+                cls_id = int(box.cls.item())
+                conf = box.conf.item()
+                x_center, y_center, width, height = box.xywh.squeeze().tolist()
+                x_min = x_center
+                y_min = y_center
+
+                if conf > 0.7 and cls_id in TARGET_SET and 200 < x_min < 500 and y_min > 300:
+                    # 使用 xyxy 获取精确边界框中心
+                    xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                    center_x = int((xyxy[0] + xyxy[2]) / 2)
+                    center_y = int((xyxy[1] + xyxy[3]) / 2)
+                    detected.append({
+                        'cls_id': cls_id,
+                        'conf': conf,
+                        'center': (center_x, center_y),
+                        'box': box
+                    })
+
+            # 如果检测到符合条件的目标，立即处理第一个
+            if detected:
+                first = detected[0]  # 取第一个检测到的目标
+                center_x, center_y = first['center']
+                cls_id = first['cls_id']
+                score = first['conf']
+
+                # 构造齐次坐标
+                pixel_coords = np.array([center_x, center_y, 1], dtype=np.float32)
+
+                # 判断左右并计算机器人坐标
+                if center_x > 340:
+                    right_or_left = "right"
+                    x_robot, y_robot = matrix_right @ pixel_coords
+                    x_robot -= 34  # 根据你的原始偏移调整
+                    y_robot -= 30
+                else:
+                    right_or_left = "left"
+                    x_robot, y_robot = matrix_left @ pixel_coords
+                    x_robot += 0
+                    y_robot += 32
+
+                # 生成结果字符串
+                result_str = f"{right_or_left},{x_robot:.2f},{y_robot:.2f}"
+
+                # 发送结果
+                with client_lock:
+                    current_state = STATE_WAITING_RESULT_OK  # 进入等待 resultOK 状态
+
+                msg = f"RESULT:{result_str}\n"
+                try:
+                    if client_socket:
+                        client_socket.sendall(msg.encode('utf-8'))
+                        print(f"📤 立即发送结果: {msg.strip()}")
+                except Exception as e:
+                    print(f"❌ 发送失败: {e}")
+
+                # 绘制当前目标为高亮
+                box = first['box']
+                xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                color = colors[cls_id]
+                cv2.rectangle(display_image, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), (0, 0, 255), 3)  # 红色加粗框
+                cv2.putText(display_image, f"SENT: {result_str}", (50, 150),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+        elif state == STATE_WAITING_RESULT_OK:
+            cv2.putText(display_image, "WAITING resultOK...", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+
+        else:  # STATE_WAITING_CMD
+            cv2.putText(display_image, "WAITING start...", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 100), 2)
+
+        # 绘制所有检测框（非 SENT 的用原色）
+        if state == STATE_DETECTING and 'result' in locals():
+            for box in result.boxes:
+                if box.conf.item() > 0.7:
+                    cls_id = int(box.cls.item())
+                    if cls_id in TARGET_SET:
+                        name = result.names[cls_id]
+                        xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                        color = colors[cls_id]
+                        # 已发送的目标已高亮，避免重复绘制
+                        cv2.rectangle(display_image, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), color, 2)
+                        cv2.putText(display_image, f"{name}:{box.conf.item():.2f}", (xyxy[0], xyxy[1] - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        cv2.imshow('YOLOv8 Detection', display_image)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+finally:
+    pipeline.stop()
+    cv2.destroyAllWindows()
+    if client_socket:
+        client_socket.close()

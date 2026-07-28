@@ -1,0 +1,25 @@
+data:2025/6/20
+version:V1.0.0.0
+log:1.首次适配P2机器
+log:1.首次适配P2机器
+
+data:20257/22
+version:V1.0.0.0
+log:1.增加伺服温度上传，修改灵巧手话题名称
+    2.修改robot_upper_control.py中的系统运行路径
+    
+data:20257/24
+version:V1.0.0.0
+log:1.robot_upper_control.py例程加入状态机判断和上肢接管设置
+
+data:2025/7/30
+version:V1.0.0.0
+log:1.robot_upper_control.py增加main()函数
+
+data:2025/8/14
+version:V1.0.0.0
+log:1.修改cyclonedds.xml文件为固定网口名（注意需要把此文件配置到系统环境变量中才生效）
+
+data:2025/8/29
+version:V1.0.0.1
+log:1.修改加入报警字段、报错信息等

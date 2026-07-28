@@ -1,0 +1,44 @@
+{
+    "python.defaultInterpreterPath": "/home/dobotpc2/miniforge3/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/robot_control_dds",
+        "${workspaceFolder}/py_viewer"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.diagnosticMode": "workspace",
+    "python.languageServer": "None",
+    "python.analysis.indexing": true,
+    "python.analysis.packageIndexDepths": [
+        {
+            "name": "",
+            "depth": 2,
+            "includeAllSymbols": true
+        }
+    ],
+    "cursorpyright.analysis.autoImportCompletions": true,
+    "cursorpyright.analysis.autoSearchPaths": true,
+    "cursorpyright.analysis.diagnosticMode": "workspace",
+    "cursorpyright.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/robot_control_dds",
+        "${workspaceFolder}/py_viewer"
+    ],
+    "cursorpyright.analysis.typeCheckingMode": "basic"
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

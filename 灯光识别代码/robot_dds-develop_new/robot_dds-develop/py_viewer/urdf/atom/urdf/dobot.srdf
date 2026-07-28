@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!--
+
+   UR-5 SRDF
+
+   This file is an alternative way of specifying semantics on the robot
+   structure.
+
+   It also provides:
+   - the set of interesting collision pairs
+
+  -->
+<robot name="doobt">
+  <disable_collisions link1="torso_link" link2="left_shoulder_pitch_link"/>
+  <disable_collisions link1="torso_link" link2="right_shoulder_pitch_link"/>
+  
+  
+  <disable_collisions link1="left_shoulder_pitch_link" link2="left_shoulder_roll_link"/>
+  
+  <disable_collisions link1="left_elbow_pitch_link" link2="left_elbow_roll_link"/>
+  
+  <disable_collisions link1="right_shoulder_pitch_link" link2="right_shoulder_roll_link"/>
+  
+  <disable_collisions link1="right_elbow_pitch_link" link2="right_elbow_roll_link"/>
+
+</robot>

@@ -1,0 +1,34 @@
+{
+    "include": [
+        "robot_control_dds",
+        "py_viewer"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        "**/node_modules"
+    ],
+    "extraPaths": [
+        ".",
+        "robot_control_dds",
+        "py_viewer"
+    ],
+    "pythonVersion": "3.12",
+    "typeCheckingMode": "basic",
+    "reportMissingImports": true,
+    "reportMissingTypeStubs": false,
+    "stubPath": ""
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

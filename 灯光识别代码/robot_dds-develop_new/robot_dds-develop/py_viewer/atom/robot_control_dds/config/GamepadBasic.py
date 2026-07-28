@@ -1,0 +1,20 @@
+key_names = [
+    "A",
+    "B",
+    "X",
+    "Y",
+    "UP",
+    "DOWN",
+    "LEFT",
+    "RIGHT",
+    "SELECT",
+    "START",
+    "LB",
+    "RB",
+    "LT",
+    "RT",
+    "LX",
+    "LY",
+    "RX",
+    "RY"
+]

@@ -1,0 +1,281 @@
+import cv2
+import time
+from ultralytics import YOLO
+import random
+import pyrealsense2 as rs
+import numpy as np
+import socket
+import threading
+
+# -----------------------------
+# 工具函数：读取坐标文件并计算仿射矩阵
+# -----------------------------
+def read_2d_points_from_file(file_path):
+    points = []
+    try:
+        with open(file_path, 'r') as file:
+            for i, line in enumerate(file):
+                try:
+                    x, y = map(float, line.strip().split())
+                    points.append([x, y])
+                except ValueError:
+                    print(f"文件 '{file_path}' 第 {i+1} 行格式错误，跳过。")
+        return np.array(points, dtype=np.float32)
+    except FileNotFoundError:
+        print(f"文件未找到: {file_path}")
+        return None
+
+def estimate_affine_2d(src_points, dst_points):
+    if src_points is None or dst_points is None or len(src_points) < 3 or len(src_points) != len(dst_points):
+        print("仿射变换估计失败：点数不足或文件为空")
+        return None
+    matrix, _ = cv2.estimateAffine2D(src_points, dst_points)
+    return matrix
+
+# -----------------------------
+# 预加载仿射矩阵
+# -----------------------------
+print("正在加载左右手仿射变换矩阵...")
+
+src_left = read_2d_points_from_file('camPosLeft.txt')
+dst_left = read_2d_points_from_file('robPosLeft.txt')
+matrix_left = estimate_affine_2d(src_left, dst_left)
+
+src_right = read_2d_points_from_file('camPosT_1.txt')
+dst_right = read_2d_points_from_file('robPosT_1.txt')
+matrix_right = estimate_affine_2d(src_right, dst_right)
+
+if matrix_left is None:
+    print("❌ 错误: 左手仿射矩阵加载失败")
+    exit(1)
+if matrix_right is None:
+    print("❌ 错误: 右手仿射矩阵加载失败")
+    exit(1)
+
+print("✅ 仿射矩阵加载成功")
+
+# -----------------------------
+# 模型加载
+# -----------------------------
+model = YOLO('/home/dobotpc2/Documents/visionDetect/runs/train/exp4/weights/best.pt')
+num_classes = len(model.names)
+colors = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for _ in range(num_classes)]
+
+try:
+    green_id = list(model.names.values()).index('green')
+    yellow_id = list(model.names.values()).index('yellow')
+except ValueError:
+    print("模型中未找到 'green' 或 'yellow' 类别")
+    exit(1)
+
+TARGET_CLASSES = {green_id, yellow_id}
+
+# -----------------------------
+# RealSense 相机设置
+# -----------------------------
+SECOND_CAMERA_SERIAL = "339522300702"
+pipeline = rs.pipeline()
+config = rs.config()
+
+ctx = rs.context()
+devices = ctx.query_devices()
+if not any(dev.get_info(rs.camera_info.serial_number) == SECOND_CAMERA_SERIAL for dev in devices):
+    print(f"未找到相机: {SECOND_CAMERA_SERIAL}")
+    exit(1)
+
+config.enable_device(SECOND_CAMERA_SERIAL)
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+# -----------------------------
+# TCP 服务端设置
+# -----------------------------
+TCP_HOST = '127.0.0.1'
+TCP_PORT = 65432
+
+client_socket = None
+client_lock = threading.Lock()
+
+# 状态定义
+STATE_WAITING_CMD = 'WAITING_CMD'
+STATE_DETECTING = 'DETECTING'
+STATE_WAITING_RESULT_OK = 'WAITING_RESULT_OK'
+
+current_state = STATE_WAITING_CMD
+delay_start_time = None  # 延迟开始时间
+pending_results = None   # 缓存待发送的结果
+image_counter = 0
+
+def tcp_server():
+    global client_socket, current_state
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind((TCP_HOST, TCP_PORT))
+    server_socket.listen(1)
+    print(f"TCP服务端已启动，监听 {TCP_HOST}:{TCP_PORT}...")
+
+    while True:
+        conn, addr = server_socket.accept()
+        with client_lock:
+            client_socket = conn
+        print(f"客户端 {addr} 已连接")
+        try:
+            client_socket.sendall(b"ACK:READY\n")
+
+            while True:
+                data = client_socket.recv(1024).decode('utf-8').strip()
+                if not data:
+                    break
+
+                print(f"收到指令: {data}")
+
+                if current_state == STATE_WAITING_CMD:
+                    if data.lower() in ['start', 'resultok']:
+                        with client_lock:
+                            current_state = STATE_DETECTING
+                        client_socket.sendall(b"ACK:DETECTION_STARTED\n")
+                        print("🟢 进入检测状态")
+
+                elif current_state == STATE_WAITING_RESULT_OK:
+                    if data.lower() == 'resultok':
+                        with client_lock:
+                            current_state = STATE_DETECTING
+                        client_socket.sendall(b"ACK:DETECTION_RESTARTED\n")
+                        print("🟢 重新开始检测")
+
+        except (ConnectionResetError, ConnectionAbortedError, OSError):
+            print("客户端连接中断")
+        finally:
+            with client_lock:
+                client_socket = None
+            print("等待新客户端连接...")
+
+# 启动 TCP 服务线程
+tcp_thread = threading.Thread(target=tcp_server, daemon=True)
+tcp_thread.start()
+
+# -----------------------------
+# 主循环
+# -----------------------------
+pipeline.start(config)
+
+try:
+    while True:
+        frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        if not color_frame:
+            continue
+
+        color_image = np.asanyarray(color_frame.get_data())
+        display_image = color_image.copy()
+
+        # 获取当前状态和延迟信息
+        with client_lock:
+            state = current_state
+            current_delay_start = delay_start_time
+            current_pending = pending_results.copy() if pending_results else None
+
+        # 状态机处理
+        if state == STATE_DETECTING:
+            results = model.predict(source=color_image, save=False, verbose=False)
+            result = results[0]
+            boxes = result.boxes
+
+            detected_classes = {int(box.cls.item()) for box in boxes if box.conf.item() > 0.7}
+
+            # 如果尚未启动延迟，且检测到目标
+            if current_delay_start is None and TARGET_CLASSES.issubset(detected_classes):
+                print("✅ 同时检测到 green 和 yellow，启动 5 秒延迟...")
+                with client_lock:
+                    delay_start_time = time.time()
+                current_delay_start = time.time()
+
+                # 计算并缓存结果（但不发送）
+                transformed_results = []
+                for box in boxes:
+                    score = box.conf.item()
+                    cls_id = int(box.cls.item())
+                    if score > 0.7 and cls_id in TARGET_CLASSES:
+                        name = result.names[cls_id]
+                        xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                        center_x = int((xyxy[0] + xyxy[2]) / 2)
+                        center_y = int((xyxy[1] + xyxy[3]) / 2)
+
+                        if cls_id == green_id:
+                            pixel_coords = np.array([center_x, center_y, 1], dtype=np.float32)
+                            x_robot, y_robot = matrix_right @ pixel_coords
+                            x_robot -= 20
+                            y_robot -= 30
+                            print(f"🟢 green -> ({x_robot:.2f}, {y_robot:.2f})")
+                        elif cls_id == yellow_id:
+                            pixel_coords = np.array([center_x, center_y, 1], dtype=np.float32)
+                            x_robot, y_robot = matrix_left @ pixel_coords
+                            x_robot += 20
+                            y_robot += 10
+                            print(f"🟡 yellow -> ({x_robot:.2f}, {y_robot:.2f})")
+
+                        transformed_results.append(f"{name},{score:.2f},{x_robot:.2f},{y_robot:.2f}")
+
+                # 保存图像
+                output_filename = f"trigger_result_{image_counter}.jpg"
+                cv2.imwrite(output_filename, color_image)
+                print(f"📷 已保存图像: {output_filename}")
+                image_counter += 1
+
+                with client_lock:
+                    pending_results = transformed_results
+
+            # 如果延迟已启动，检查是否超时
+            elif current_delay_start is not None:
+                elapsed = time.time() - current_delay_start
+                remaining = max(0, 5 - elapsed)
+                # 显示倒计时
+                cv2.putText(display_image, f"DELAY: {remaining:.1f}s", (50, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 2)
+
+                if elapsed >= 5:
+                    # 延迟结束，发送结果
+                    if current_pending and client_socket:
+                        response = "|".join(current_pending)
+                        msg = f"RESULT:{response}\n"
+                        try:
+                            client_socket.sendall(msg.encode('utf-8'))
+                            print(f"📤 5秒延迟结束，发送结果: {msg.strip()}")
+                        except (ConnectionResetError, ConnectionAbortedError):
+                            print("❌ 发送失败：客户端已断开")
+
+                    # 更新状态
+                    with client_lock:
+                        current_state = STATE_WAITING_RESULT_OK
+                        delay_start_time = None
+                        pending_results = None
+
+        elif state == STATE_WAITING_RESULT_OK:
+            cv2.putText(display_image, "WAITING resultOK...", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        else:  # STATE_WAITING_CMD
+            cv2.putText(display_image, "WAITING start/resultOK...", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 100), 2)
+
+        # 绘制检测框（仅在检测状态）
+        if state == STATE_DETECTING:
+            for box in result.boxes:
+                if box.conf.item() > 0.7:
+                    cls_id = int(box.cls.item())
+                    name = result.names[cls_id]
+                    xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                    color = colors[cls_id]
+                    cv2.rectangle(display_image, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), color, 2)
+                    cv2.putText(display_image, f"{name}:{box.conf.item():.2f}", (xyxy[0], xyxy[1]-5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        cv2.imshow('YOLOv8 Detection', display_image)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+finally:
+    pipeline.stop()
+    cv2.destroyAllWindows()
+    if client_socket:
+        client_socket.close()

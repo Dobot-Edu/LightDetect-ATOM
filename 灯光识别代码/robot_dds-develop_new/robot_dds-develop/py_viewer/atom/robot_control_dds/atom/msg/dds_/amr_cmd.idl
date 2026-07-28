@@ -1,0 +1,36 @@
+module dobot_atom{
+    module msg{
+        module dds_{
+            enum AMRCommandType {
+                CANCEL_TASK,      // 取消任务
+                PAUSE_TASK,       // 暂停任务
+                RESUME_TASK,      // 恢复任务
+                MOVE_TO_TAG,      // 移动到标记点, target_id必填，theta选填，theta为绝对角度,如果为0或不填则不指定角度
+                REMOTE_CONTROL,    // 遥控
+                ROTATE,            // 原地旋转 theta必填，为相对角度，相对当前底盘的角度 -- 华睿不可用
+                START_REMOTE,      // 开始遥控
+                STOP_REMOTE,       // 关闭遥控
+                SUBSCRIBE_LASER,     // 订阅底盘激光雷达数据
+                UNSUBSCRIBE_LASER,   // 取消订阅底盘激光雷达数据
+                START_MAPPING,       // 底盘开始扫图
+                SAVE_MAP,            // 保存当前扫的图在本地
+                STOP_MAPPING,        // 结束扫图
+                SET_VEL,             // 设置速度（同时设置线速度和角速度，空载和负载）
+                SET_ACCEL,           // 设置加速度（同时设置线性和角度的加速度，空载和负载）
+                SET_DECEL            // 设置减速度（同时设置线性和角度的减速度，空载和负载）
+            };
+
+            @extensibility(FINAL)
+            struct AMRCommand_ {
+                AMRCommandType command_type;    // 命令类型,参考上述AMRCommandType
+                uint32 target_id;             // 目标ID（用于MOVE_TO_TAG）
+                float linear_vel;             // 线速度 ,m/s
+                float angular_vel;            //角速度  ,rad/s
+                uint32 command_id;            // 命令ID（用于跟踪）
+                uint64 timestamp;             // 时间戳
+                float theta;                //传入角度
+            };
+        };
+
+    };
+};
