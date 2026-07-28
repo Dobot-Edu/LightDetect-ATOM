@@ -268,7 +268,7 @@ rpc.play_audio()
 
 **步骤 6**：打开脚本 `robot_dds-develop_new/robot_dds-develop/py_viewer/grap_control_new_tts.py`，找到对应的升降控制命令，填写关节值
 
-![image.png](图片\pose_1.png)
+![image.png](images/pose_1.png)
 
 **步骤 7**：通过手柄或者 APP，将机器切换至调试模式，运行脚本 `robot_dds-develop_new/robot_dds-develop/py_viewer/atom/robot_control_new.py`，运行后会弹出一个上位机界面，可以对 Atom 上肢进行点动以及截取点位坐标信息。
 
